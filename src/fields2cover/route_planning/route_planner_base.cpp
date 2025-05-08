@@ -28,7 +28,7 @@ F2CRoute RoutePlannerBase::genRoute(
       cells, swaths, shortest_graph, d_tol, redirect_swaths);
 
   std::vector<long long int> v_route = computeBestRoute(
-      cov_graph, show_log, time_limit_seconds, search_for_optimum);
+      cov_graph, show_log, time_limit_seconds, search_for_optimum, -1);
   return transformSolutionToRoute(
       v_route, swaths, cov_graph, shortest_graph);
 }
@@ -148,9 +148,15 @@ F2CGraph2D RoutePlannerBase::createCoverageGraph(
 
 std::vector<long long int> RoutePlannerBase::computeBestRoute(
     const F2CGraph2D& cov_graph, bool show_log, long int time_limit_seconds,
-    bool use_guided_local_search) const {
-  int depot_id = static_cast<int>(cov_graph.numNodes()-1);
-  const ortools::RoutingIndexManager::NodeIndex depot{depot_id};
+    bool use_guided_local_search, long long int depot_id) const {
+  if (depot_id < 0) {
+    depot_id = static_cast<int>(cov_graph.numNodes()-1);
+  }
+  // Ensure depot_id is within valid int range
+  if (depot_id > std::numeric_limits<int>::max()) {
+    depot_id = std::numeric_limits<int>::max();
+  }
+  const ortools::RoutingIndexManager::NodeIndex depot{static_cast<int>(depot_id)};
   ortools::RoutingIndexManager manager(cov_graph.numNodes(), 1, depot);
   ortools::RoutingModel routing(manager);
 

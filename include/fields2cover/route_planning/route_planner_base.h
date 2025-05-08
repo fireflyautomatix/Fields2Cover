@@ -79,7 +79,7 @@ class RoutePlannerBase {
   ///        but may find less optimal solutions.
   virtual std::vector<long long int> computeBestRoute(
       const F2CGraph2D& cov_graph, bool show_log, long int time_limit_seconds,
-      bool use_guided_local_search = true) const;
+      bool use_guided_local_search = true, long long int depot_id = -1) const;
 
   /// Tranform index of points to an actual Route.
   virtual F2CRoute transformSolutionToRoute(
