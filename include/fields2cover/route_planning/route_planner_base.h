@@ -11,6 +11,7 @@
 #include <vector>
 #include <map>
 #include <optional>
+#include <string>
 #include <limits>
 #include <utility>
 #include "fields2cover/types.h"
@@ -80,6 +81,28 @@ class RoutePlannerBase {
   virtual std::vector<long long int> computeBestRoute(
       const F2CGraph2D& cov_graph, bool show_log, long int time_limit_seconds,
       bool use_guided_local_search = true, long long int depot_id = -1) const;
+
+  /// Variant of computeBestRoute with deterministic stopping and pruned arcs.
+  ///
+  /// Starts from computeBestRoute's settings (AUTOMATIC first solution,
+  /// GUIDED_LOCAL_SEARCH, use_full_propagation=false, 10 s time limit) and
+  /// merges `search_params_text` over them: an
+  /// operations_research::RoutingSearchParameters message in protobuf text
+  /// format, e.g. "solution_limit: 2000 time_limit { seconds: 10 }".
+  ///
+  /// @param remove_missing_arcs If true, arcs that are not in cov_graph are
+  ///        removed from the NextVar domains instead of costing INF. If that
+  ///        leaves no solution, the problem is solved again with them kept.
+  /// @param stall_solution_limit If > 0, stop once this many accepted
+  ///        solutions in a row have not improved the best cost. Counts
+  ///        solutions, not time, so the result does not depend on CPU speed
+  ///        or load. Keep a time limit in search_params_text as a safety cap.
+  /// @return Node ids of the route, as computeBestRoute. Empty if the solver
+  ///         found no solution.
+  virtual std::vector<long long int> computeBestRouteWithParams(
+      const F2CGraph2D& cov_graph, const std::string& search_params_text,
+      bool remove_missing_arcs = true, long long int stall_solution_limit = 0,
+      long long int depot_id = -1) const;
 
   /// Tranform index of points to an actual Route.
   virtual F2CRoute transformSolutionToRoute(

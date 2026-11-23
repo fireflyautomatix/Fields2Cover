@@ -8,10 +8,13 @@
 #include <ortools/constraint_solver/routing_enums.pb.h>
 #include <ortools/constraint_solver/routing_index_manager.h>
 #include <ortools/constraint_solver/routing_parameters.h>
+#include <google/protobuf/text_format.h>
 #include <math.h>
 #include <utility>
 #include <vector>
 #include <limits>
+#include <stdexcept>
+#include <string>
 #include "fields2cover/route_planning/route_planner_base.h"
 
 namespace f2c::rp {
@@ -194,6 +197,121 @@ std::vector<long long int> RoutePlannerBase::computeBestRoute(
     index = solution->Value(routing.NextVar(index));
   }
   return v_id;
+}
+
+std::vector<long long int> solveRouting(
+    const F2CGraph2D& cov_graph, const std::vector<int64_t>& cost,
+    const ortools::RoutingSearchParameters& params, bool remove_missing_arcs,
+    long long int stall_solution_limit, int depot) {
+  const int64_t n = static_cast<int64_t>(cov_graph.numNodes());
+  ortools::RoutingIndexManager manager(
+      static_cast<int>(n), 1, ortools::RoutingIndexManager::NodeIndex{depot});
+  ortools::RoutingModel routing(manager);
+  const int transit_callback_index = routing.RegisterTransitCallback(
+      [&cost, &manager, n] (int64_t from, int64_t to) -> int64_t {
+        return cost[manager.IndexToNode(from).value() * n +
+                    manager.IndexToNode(to).value()];
+      });
+  routing.SetArcCostEvaluatorOfAllVehicles(transit_callback_index);
+
+  if (remove_missing_arcs) {
+    routing.CloseModelWithParameters(params);
+    for (int64_t idx = 0; idx < routing.Size(); ++idx) {
+      const int64_t from = manager.IndexToNode(idx).value();
+      std::vector<int64_t> allowed;
+      for (const size_t to : cov_graph.getEdgesFrom(from)) {
+        if (static_cast<int64_t>(to) == from ||
+            cost[from * n + to] == std::numeric_limits<int64_t>::max()) {
+          continue;
+        } else if (static_cast<int>(to) == depot) {
+          allowed.push_back(routing.End(0));
+        } else {
+          allowed.push_back(manager.NodeToIndex(
+              ortools::RoutingIndexManager::NodeIndex{static_cast<int>(to)}));
+        }
+      }
+      routing.NextVar(idx)->SetValues(allowed);
+    }
+  }
+
+  int64_t best = std::numeric_limits<int64_t>::max();
+  int64_t since_best = 0;
+  if (stall_solution_limit > 0) {
+    routing.AddAtSolutionCallback([&routing, &best, &since_best]() {
+      const int64_t c = routing.CostVar()->Max();
+      if (c < best) {
+        best = c;
+        since_best = 0;
+      } else {
+        ++since_best;
+      }
+    });
+    routing.AddSearchMonitor(routing.solver()->MakeCustomLimit(
+        [&since_best, stall_solution_limit]() {
+          return since_best >= stall_solution_limit;
+        }));
+  }
+
+  const ortools::Assignment* solution = routing.SolveWithParameters(params);
+  std::vector<long long int> v_id;
+  if (solution == nullptr) {
+    return v_id;
+  }
+  int64_t index = solution->Value(routing.NextVar(routing.Start(0)));
+  while (!routing.IsEnd(index)) {
+    v_id.emplace_back(manager.IndexToNode(index).value());
+    index = solution->Value(routing.NextVar(index));
+  }
+  return v_id;
+}
+
+std::vector<long long int> RoutePlannerBase::computeBestRouteWithParams(
+    const F2CGraph2D& cov_graph, const std::string& search_params_text,
+    bool remove_missing_arcs, long long int stall_solution_limit,
+    long long int depot_id) const {
+  const int64_t n = static_cast<int64_t>(cov_graph.numNodes());
+  if (depot_id < 0) {
+    depot_id = n - 1;
+  }
+  if (depot_id > std::numeric_limits<int>::max()) {
+    depot_id = std::numeric_limits<int>::max();
+  }
+  ortools::RoutingSearchParameters params =
+    ortools::DefaultRoutingSearchParameters();
+  params.set_use_full_propagation(false);
+  params.set_first_solution_strategy(
+    ortools::FirstSolutionStrategy::AUTOMATIC);
+  params.set_local_search_metaheuristic(
+    ortools::LocalSearchMetaheuristic::GUIDED_LOCAL_SEARCH);
+  params.mutable_time_limit()->set_seconds(10);
+  if (!search_params_text.empty()) {
+    ortools::RoutingSearchParameters overrides;
+    if (!google::protobuf::TextFormat::ParseFromString(
+          search_params_text, &overrides)) {
+      throw std::invalid_argument(
+          "computeBestRouteWithParams: cannot parse search_params_text");
+    }
+    params.MergeFrom(overrides);
+    if (overrides.has_time_limit()) {
+      *params.mutable_time_limit() = overrides.time_limit();
+    }
+  }
+
+  // Dense copy of the arc costs: the transit callback is the solver's hot path.
+  std::vector<int64_t> cost(n * n);
+  for (int64_t i = 0; i < n; ++i) {
+    for (int64_t j = 0; j < n; ++j) {
+      cost[i * n + j] = cov_graph.getCostFromEdge(i, j);
+    }
+  }
+  std::vector<long long int> route = solveRouting(
+      cov_graph, cost, params, remove_missing_arcs, stall_solution_limit,
+      static_cast<int>(depot_id));
+  if (route.empty() && remove_missing_arcs) {
+    route = solveRouting(cov_graph, cost, params, false, stall_solution_limit,
+                         static_cast<int>(depot_id));
+  }
+  return route;
 }
 
 F2CRoute RoutePlannerBase::transformSolutionToRoute(
